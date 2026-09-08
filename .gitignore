@@ -1,0 +1,18 @@
+# Python / Backend
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+.env
+backend/.venv/
+backend/.env
+backend/output/
+output/
+
+# Frontend / Web
+node_modules/
+dist/
+.next/
+build/
+.cache/

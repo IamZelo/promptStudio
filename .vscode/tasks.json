@@ -1,0 +1,82 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Activate Backend venv",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-c",
+        "source .venv/bin/activate && exec zsh"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "new",
+        "showReuseMessage": false
+      },
+      "detail": "Opens an interactive terminal in backend/ with .venv activated"
+    },
+    {
+      "label": "Run Multi-Agent Pipeline (Mock Demo)",
+      "type": "shell",
+      "command": ".venv/bin/python main.py --mock",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "detail": "Runs the multi-agent pipeline in mock simulation mode (no API calls)"
+    },
+    {
+      "label": "Run Multi-Agent Pipeline (Live with Prompt)",
+      "type": "shell",
+      "command": ".venv/bin/python main.py -p \"${input:projectPrompt}\"",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "shared"
+      },
+      "detail": "Runs the multi-agent pipeline with your input prompt using Gemini API"
+    },
+    {
+      "label": "Install Backend Dependencies",
+      "type": "shell",
+      "command": ".venv/bin/pip install -r requirements.txt",
+      "options": {
+        "cwd": "${workspaceFolder}/backend"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared"
+      },
+      "detail": "Installs Python packages from requirements.txt into backend/.venv"
+    }
+  ],
+  "inputs": [
+    {
+      "id": "projectPrompt",
+      "type": "promptString",
+      "description": "Enter the project requirement prompt",
+      "default": "Create a CLI Pomodoro timer with task tracking"
+    }
+  ]
+}
