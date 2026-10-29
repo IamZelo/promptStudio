@@ -5,7 +5,13 @@ Provides high-quality realistic outputs when API keys are not provided.
 
 from __future__ import annotations
 
-from src.schemas import ArchitectureBlueprint, FileSpec, GeneratedFile
+from src.schemas import (
+    AcceptanceCriterion,
+    ArchitectureBlueprint,
+    FileSpec,
+    GeneratedFile,
+    PackageDependency,
+)
 
 
 def get_mock_blueprint(prompt: str) -> ArchitectureBlueprint:
@@ -13,37 +19,93 @@ def get_mock_blueprint(prompt: str) -> ArchitectureBlueprint:
     return ArchitectureBlueprint(
         project_name="quicknote-cli",
         summary="A lightweight command-line markdown note-taking and search tool with tag management.",
+        original_request=prompt,
+        assumptions=["Notes are persisted locally as JSON and identified by generated IDs."],
+        functional_requirements=[
+            "Create, list, search, and delete locally persisted notes.",
+            "Expose all operations through a command-line interface.",
+        ],
+        acceptance_criteria=[
+            AcceptanceCriterion(
+                id="NOTE-01", description="Users can create and list persisted notes.",
+                verification="A test adds a note and reads it from a second storage instance.",
+            ),
+            AcceptanceCriterion(
+                id="NOTE-02", description="Users can search note text and tags.",
+                verification="A test verifies matching and non-matching searches.",
+            ),
+            AcceptanceCriterion(
+                id="NOTE-03", description="Users can delete a note by ID.",
+                verification="A test deletes a note and confirms it is absent.",
+            ),
+        ],
         tech_stack=["Python 3.10+", "argparse", "json", "pathlib"],
+        dependency_inventory=[
+            PackageDependency(
+                name="pytest", version=">=8.0.0", purpose="Automated tests",
+                scope="development",
+            )
+        ],
+        primary_language="Python 3.10+",
+        framework="Python standard library",
+        package_manager="pip",
+        install_command="pip install -r requirements.txt",
+        run_command="python3 -m quicknote.cli --help",
+        test_command="python3 -m pytest -q",
+        typecheck_command="",
+        build_command="",
         files=[
+            FileSpec(
+                path="requirements.txt",
+                description="Development dependency manifest.",
+                external_dependencies=["pytest"],
+                public_contract="Installs pytest using a compatible version range.",
+                file_type="manifest",
+            ),
             FileSpec(
                 path="quicknote/models.py",
                 description="Data model for Note with id, title, tags, content, and timestamp, including JSON serialization.",
-                dependencies=["dataclasses", "datetime", "typing"]
+                implements=["NOTE-01"],
+                public_contract="Exports Note with stable to_dict and from_dict serialization.",
+                file_type="source",
             ),
             FileSpec(
                 path="quicknote/storage.py",
                 description="Storage manager class to create, read, list, search, and delete notes stored as JSON.",
-                dependencies=["quicknote/models.py", "pathlib", "json"]
+                internal_dependencies=["quicknote/models.py"],
+                implements=["NOTE-01", "NOTE-02", "NOTE-03"],
+                public_contract="Exports NoteStorage.add_note, list_notes, search_notes, and delete_note.",
+                file_type="source",
             ),
             FileSpec(
                 path="quicknote/cli.py",
                 description="Command-line interface with subcommands: add, list, search, and delete.",
-                dependencies=["quicknote/storage.py", "quicknote/models.py", "argparse", "sys"]
+                internal_dependencies=["quicknote/storage.py", "quicknote/models.py"],
+                implements=["NOTE-01", "NOTE-02", "NOTE-03"],
+                public_contract="Exports main and maps CLI subcommands to NoteStorage operations.",
+                file_type="source",
             ),
             FileSpec(
                 path="quicknote/__init__.py",
                 description="Package initialization exporting public classes.",
-                dependencies=["quicknote/models.py", "quicknote/storage.py"]
+                internal_dependencies=["quicknote/models.py", "quicknote/storage.py"],
+                public_contract="Exports Note and NoteStorage.",
+                file_type="source",
             ),
             FileSpec(
-                path="requirements.txt",
-                description="List of external package dependencies with pinned versions.",
-                dependencies=[]
+                path="tests/test_storage.py",
+                description="Acceptance tests for persistence, search, and deletion.",
+                internal_dependencies=["quicknote/storage.py"],
+                external_dependencies=["pytest"],
+                implements=["NOTE-01", "NOTE-02", "NOTE-03"],
+                public_contract="Verifies every must-level acceptance criterion in isolated temporary storage.",
+                file_type="test",
             ),
             FileSpec(
                 path="README.md",
                 description="Project documentation detailing setup, installation guide, command examples, and architecture.",
-                dependencies=["requirements.txt"]
+                internal_dependencies=["requirements.txt"],
+                file_type="documentation",
             ),
         ]
     )
@@ -240,10 +302,29 @@ __all__ = ["Note", "NoteStorage"]
 
     elif target_file.path == "requirements.txt":
         code = '''# QuickNote Project Dependencies
-pydantic>=2.0.0
-pytest>=7.0.0
+pytest>=8.0.0
 '''
         summary = "Defined project dependency specifications."
+
+    elif target_file.path == "tests/test_storage.py":
+        code = '''"""Acceptance tests for QuickNote storage."""
+
+from quicknote.storage import NoteStorage
+
+
+def test_create_list_search_and_delete(tmp_path):
+    storage = NoteStorage(tmp_path)
+    note = storage.add_note("Project", "Agent pipeline", ["ai"])
+
+    reloaded = NoteStorage(tmp_path)
+    assert [item.id for item in reloaded.list_notes()] == [note.id]
+    assert [item.id for item in reloaded.search_notes("agent")] == [note.id]
+    assert [item.id for item in reloaded.search_notes("ai")] == [note.id]
+    assert reloaded.search_notes("missing") == []
+    assert reloaded.delete_note(note.id) is True
+    assert reloaded.list_notes() == []
+'''
+        summary = "Added isolated acceptance coverage for persistence, search, and deletion."
 
     elif target_file.path == "README.md":
         code = '''# QuickNote CLI

@@ -48,14 +48,14 @@ def log_error(message: str) -> None:
 def display_banner() -> None:
     banner_text = (
         "[bold cyan]Multi-Agent Software Development Pipeline[/bold cyan]\n"
-        "[dim]Collaborative AI: Architect Agent ➔ Developer Agent[/dim]"
+        "[dim]Gemini Architect -> llama.cpp Developer -> QA -> Gemini Critic[/dim]"
     )
     if HAS_RICH:
         console.print(Panel(banner_text, expand=False, border_style="cyan"))
     else:
         print("=" * 60)
         print(" Multi-Agent Software Development Pipeline")
-        print(" Collaborative AI: Architect Agent -> Developer Agent")
+        print(" Gemini Architect -> llama.cpp Developer -> QA -> Gemini Critic")
         print("=" * 60)
 
 
@@ -76,13 +76,17 @@ def display_blueprint(blueprint: ArchitectureBlueprint) -> None:
         table.add_column("Responsibilities", style="white")
 
         for idx, f in enumerate(blueprint.files, start=1):
-            deps = ", ".join(f.dependencies) if f.dependencies else "[dim]None[/dim]"
+            deps = ", ".join(f.internal_dependencies) if f.internal_dependencies else "[dim]None[/dim]"
             table.add_row(str(idx), f.path, deps, f.description)
 
         overview_content = (
             f"[bold]Project Name:[/bold] {blueprint.project_name}\n"
             f"[bold]Overview:[/bold] {blueprint.summary}\n"
-            f"[bold]Tech Stack:[/bold] {', '.join(blueprint.tech_stack)}"
+            f"[bold]Language:[/bold] {blueprint.primary_language}\n"
+            f"[bold]Framework:[/bold] {blueprint.framework}\n"
+            f"[bold]Package Manager:[/bold] {blueprint.package_manager}\n"
+            f"[bold]Tech Stack:[/bold] {', '.join(blueprint.tech_stack)}\n"
+            f"[bold]Acceptance Criteria:[/bold] {len(blueprint.acceptance_criteria)}"
         )
         console.print(Panel(overview_content, title="Architect Design Overview", border_style="magenta"))
         console.print(table)
@@ -90,10 +94,15 @@ def display_blueprint(blueprint: ArchitectureBlueprint) -> None:
         print("\n--- ARCHITECTURE BLUEPRINT ---")
         print(f"Project Name: {blueprint.project_name}")
         print(f"Overview:     {blueprint.summary}")
+        print(f"Language:     {blueprint.primary_language}")
+        print(f"Framework:    {blueprint.framework}")
         print(f"Tech Stack:   {', '.join(blueprint.tech_stack)}")
         print("\nPlanned Files:")
         for idx, f in enumerate(blueprint.files, start=1):
-            deps = f" (deps: {', '.join(f.dependencies)})" if f.dependencies else ""
+            deps = (
+                f" (deps: {', '.join(f.internal_dependencies)})"
+                if f.internal_dependencies else ""
+            )
             print(f"  {idx}. {f.path}{deps}\n     {f.description}")
         print("-" * 40 + "\n")
 
@@ -103,6 +112,7 @@ def display_summary_report(
     results: List[Dict[str, Any]],
     total_time: float,
     project_root: Path,
+    approved: bool = True,
 ) -> None:
     """Displays the final summary report of the multi-agent run."""
     total_lines = sum(r["lines"] for r in results)
@@ -118,54 +128,71 @@ def display_summary_report(
             summary_table.add_row(r["path"], str(r["lines"]), f"{r['duration']:.2f}s", r["summary"])
 
         console.print("\n", summary_table)
-        # Check if requirements.txt exists
-        has_reqs = any("requirements" in f.path for f in blueprint.files)
-
-        entry_hint = "python3 -m <module> --help"
-        for f in blueprint.files:
-            if any(k in f.path for k in ["cli.py", "main.py", "app.py"]):
-                entry_hint = f"python3 {f.path} --help"
-                break
-
-        guide_steps = [
-            f"  1. Navigate to the project directory:\n     [bold cyan]cd {project_root}[/bold cyan]",
-        ]
-        if has_reqs:
-            guide_steps.extend([
-                f"  2. Install project dependencies:\n     [bold cyan]pip install -r requirements.txt[/bold cyan]",
-                f"  3. Run the application:\n     [bold cyan]{entry_hint}[/bold cyan]",
-            ])
+        if approved:
+            stack = " ".join([blueprint.framework, *blueprint.tech_stack]).lower()
+            guide_steps = [
+                f"  1. Navigate to the project directory:\n     [bold cyan]cd {project_root}[/bold cyan]",
+                f"  2. Install project dependencies:\n     [bold cyan]{blueprint.install_command}[/bold cyan]",
+                f"  3. Run the application:\n     [bold cyan]{blueprint.run_command}[/bold cyan]",
+            ]
+            next_step = 4
+            if "vite" in stack:
+                guide_steps.append(
+                    "  4. Open the localhost URL printed by Vite.\n"
+                    "     [bold red]Do not open index.html directly; browsers cannot run the Vite/JSX source.[/bold red]"
+                )
+                next_step = 5
+            if blueprint.test_command.strip():
+                guide_steps.append(
+                    f"  {next_step}. Run the tests:\n     [bold cyan]{blueprint.test_command}[/bold cyan]"
+                )
+            location_text = f"• Location: [bold underline]{project_root.resolve()}[/bold underline]"
+            guide_text = "[bold yellow]Installation & Run Guide:[/bold yellow]\n" + "\n\n".join(guide_steps)
+            guide_text += (
+                "\n\n[bold yellow]Source approval does not install project dependencies. "
+                "Run the commands above in order.[/bold yellow]"
+            )
         else:
-            guide_steps.extend([
-                f"  2. Run the application:\n     [bold cyan]{entry_hint}[/bold cyan]",
-            ])
+            location_text = "• Location: [yellow]Not published; isolated staging snapshot was discarded.[/yellow]"
+            guide_text = "Fix the reported validation failures and run the pipeline again."
 
-        guide_text = "\n\n".join(guide_steps)
-
+        status_text = "Pipeline Source Approved" if approved else "Pipeline Finished Without Approval"
+        status_style = "green" if approved else "red"
         console.print(Panel(
-            f"[bold green]Pipeline Complete![/bold green]\n"
+            f"[bold {status_style}]{status_text}[/bold {status_style}]\n"
             f"• Project: [cyan]{blueprint.project_name}[/cyan]\n"
             f"• Files Created: [bold]{len(results)}[/bold] ({total_lines} total lines of code)\n"
             f"• Total Elapsed Time: [bold]{total_time:.2f}s[/bold]\n"
-            f"• Location: [bold underline]{project_root.resolve()}[/bold underline]\n\n"
-            f"[bold yellow]Installation & Run Guide:[/bold yellow]\n"
+            f"{location_text}\n\n"
             f"{guide_text}",
-            title="Success",
-            border_style="green"
+            title="Source Ready" if approved else "Incomplete",
+            border_style=status_style,
         ))
     else:
         print("\n" + "=" * 60)
-        print(" PIPELINE COMPLETE")
+        print(" PIPELINE SOURCE APPROVED" if approved else " PIPELINE FINISHED WITHOUT APPROVAL")
         print(f" Project:       {blueprint.project_name}")
         print(f" Files Created: {len(results)} ({total_lines} lines)")
-        print(f" Location:      {project_root.resolve()}")
+        if approved:
+            print(f" Location:      {project_root.resolve()}")
+        else:
+            print(" Location:      Not published; staging snapshot discarded")
         print(f" Total Time:    {total_time:.2f}s")
         print("-" * 60)
-        print(" Installation & Run Guide:")
-        print(f"  1. cd {project_root}")
-        if any("requirements" in f.path for f in blueprint.files):
-            print("  2. pip install -r requirements.txt")
-            print("  3. python3 <entrypoint> --help")
+        if approved:
+            stack = " ".join([blueprint.framework, *blueprint.tech_stack]).lower()
+            print(" Installation & Run Guide:")
+            print(f"  1. cd {project_root}")
+            print(f"  2. {blueprint.install_command}")
+            print(f"  3. {blueprint.run_command}")
+            next_step = 4
+            if "vite" in stack:
+                print("  4. Open the localhost URL printed by Vite")
+                print("     Do not open index.html directly")
+                next_step = 5
+            if blueprint.test_command.strip():
+                print(f"  {next_step}. {blueprint.test_command}")
+            print(" Source approval does not install project dependencies.")
         else:
-            print("  2. python3 <entrypoint> --help")
+            print(" Fix the reported validation failures and run the pipeline again.")
         print("=" * 60)

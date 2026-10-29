@@ -6,8 +6,36 @@ from Gemini's structured output generation.
 
 from __future__ import annotations
 
-from typing import List
-from pydantic import BaseModel, Field
+from typing import List, Literal
+from pathlib import PurePosixPath
+
+from pydantic import BaseModel, Field, field_validator
+
+
+class AcceptanceCriterion(BaseModel):
+    """A stable, testable behavior that every agent can reference by ID."""
+
+    id: str = Field(description="Stable identifier such as CALC-01")
+    description: str = Field(description="Observable behavior required from the project")
+    verification: str = Field(description="How QA can prove the behavior works")
+    priority: Literal["must", "should", "could"] = "must"
+
+    @field_validator("id")
+    @classmethod
+    def validate_id(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if not normalized or any(char.isspace() for char in normalized):
+            raise ValueError("acceptance criterion id must be a non-empty token")
+        return normalized
+
+
+class PackageDependency(BaseModel):
+    """An external package selected by the architect."""
+
+    name: str
+    version: str = Field(description="Compatible version or version range")
+    purpose: str
+    scope: Literal["runtime", "development"] = "runtime"
 
 
 class FileSpec(BaseModel):
@@ -18,10 +46,33 @@ class FileSpec(BaseModel):
     description: str = Field(
         description="Detailed responsibilities, public classes/functions, inputs, outputs, and edge cases"
     )
-    dependencies: List[str] = Field(
+    internal_dependencies: List[str] = Field(
         default_factory=list,
-        description="List of other project files or external third-party libraries this file depends on"
+        description="Exact paths of other blueprint files required by this file"
     )
+    external_dependencies: List[str] = Field(
+        default_factory=list,
+        description="Names from dependency_inventory imported or used by this file"
+    )
+    implements: List[str] = Field(
+        default_factory=list,
+        description="Acceptance criterion IDs implemented or verified by this file"
+    )
+    public_contract: str = Field(
+        default="",
+        description="Exports, inputs, outputs, state transitions, and error behavior"
+    )
+    file_type: Literal["source", "test", "config", "manifest", "documentation", "asset"] = Field(
+        description="Role this file plays in the generated project",
+    )
+
+    @field_validator("path")
+    @classmethod
+    def validate_relative_path(cls, value: str) -> str:
+        path = PurePosixPath(value)
+        if not value or path.is_absolute() or ".." in path.parts:
+            raise ValueError("file path must stay inside the generated project")
+        return value
 
 
 class ArchitectureBlueprint(BaseModel):
@@ -32,13 +83,66 @@ class ArchitectureBlueprint(BaseModel):
     summary: str = Field(
         description="High-level overview of the application architecture, design patterns, and components"
     )
+    original_request: str = Field(
+        default="",
+        description="Verbatim user request retained for downstream agents",
+    )
+    assumptions: List[str] = Field(
+        default_factory=list,
+        description="Explicit product and technical decisions made where the request was ambiguous",
+    )
+    functional_requirements: List[str] = Field(
+        default_factory=list,
+        description="Complete user-visible and system behaviors",
+    )
+    acceptance_criteria: List[AcceptanceCriterion] = Field(
+        default_factory=list,
+        description="Testable requirements with stable IDs used by files and reviews",
+    )
     tech_stack: List[str] = Field(
         default_factory=list,
         description="Technologies, frameworks, and core libraries used"
     )
+    dependency_inventory: List[PackageDependency] = Field(
+        default_factory=list,
+        description="Architect-planned dependency baseline; implementation-required support packages may be added",
+    )
+    primary_language: str = Field(
+        description="Primary implementation language and major version",
+    )
+    framework: str = Field(
+        description="Primary framework or runtime selected for the project",
+    )
+    package_manager: str = Field(
+        description="Dependency and build tool used by the selected ecosystem",
+    )
+    install_command: str = Field(
+        description="Command users run to install project dependencies",
+    )
+    run_command: str = Field(
+        description="Command users run to start the generated application",
+    )
+    test_command: str = Field(
+        description="Command users run to execute the generated test suite",
+    )
+    typecheck_command: str = Field(
+        default="",
+        description="Non-interactive type-check command, empty only when not applicable",
+    )
+    build_command: str = Field(
+        default="",
+        description="Non-interactive build command, empty only when not applicable",
+    )
     files: List[FileSpec] = Field(
         description="Ordered list of files to generate (foundation files first, followed by consumers)"
     )
+
+    @field_validator("project_name")
+    @classmethod
+    def validate_project_name(cls, value: str) -> str:
+        if not value or value in {".", ".."} or "/" in value or "\\" in value:
+            raise ValueError("project_name must be a single directory name")
+        return value
 
 
 class GeneratedFile(BaseModel):
@@ -51,4 +155,49 @@ class GeneratedFile(BaseModel):
     )
     summary: str = Field(
         description="Brief summary of implemented functionality"
+    )
+
+
+class ValidationCheck(BaseModel):
+    """One deterministic QA check and its evidence."""
+
+    name: str
+    passed: bool
+    command: str
+    exit_code: int
+    output: str = ""
+    required: bool = True
+
+
+class ValidationResult(BaseModel):
+    """Deterministic checks performed against the generated project."""
+
+    passed: bool
+    command: str
+    exit_code: int
+    output: str = ""
+    verified: bool = True
+    checks: List[ValidationCheck] = Field(default_factory=list)
+
+
+class ReviewFinding(BaseModel):
+    """A single actionable issue reported by the Critic Agent."""
+
+    severity: Literal["low", "medium", "high", "critical"]
+    file_path: str = ""
+    message: str
+    suggested_fix: str
+    criterion_ids: List[str] = Field(default_factory=list)
+    related_files: List[str] = Field(default_factory=list)
+
+
+class CriticReview(BaseModel):
+    """Structured semantic review produced after deterministic validation."""
+
+    approved: bool
+    summary: str
+    findings: List[ReviewFinding] = Field(default_factory=list)
+    requested_files: List[FileSpec] = Field(
+        default_factory=list,
+        description="Files missing from the blueprint that must be added to make the project complete",
     )

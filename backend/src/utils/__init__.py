@@ -1,6 +1,6 @@
 """Utilities package."""
 
-from src.utils.file_manager import write_file_to_disk, count_lines
+from src.utils.file_manager import write_file_to_disk, count_lines, validate_generated_content
 from src.utils.ui import (
     log_info,
     log_success,
@@ -15,6 +15,7 @@ from src.utils.ui import (
 __all__ = [
     "write_file_to_disk",
     "count_lines",
+    "validate_generated_content",
     "log_info",
     "log_success",
     "log_warning",
