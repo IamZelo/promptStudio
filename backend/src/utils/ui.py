@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import List, Dict, Any
 from src.schemas import ArchitectureBlueprint
@@ -17,7 +19,30 @@ except ImportError:
     HAS_RICH = False
 
 
+# Context-local routing keeps legacy CLI output intact and avoids global stdout capture.
+_EVENT_SINK = ContextVar("promptstudio_event_sink", default=None)
+
+
+@contextmanager
+def presentation_events(sink):
+    token = _EVENT_SINK.set(sink)
+    try:
+        yield
+    finally:
+        _EVENT_SINK.reset(token)
+
+
+def _route(kind: str, **payload) -> bool:
+    sink = _EVENT_SINK.get()
+    if sink is None:
+        return False
+    sink({"type": kind, **payload})
+    return True
+
+
 def log_info(message: str) -> None:
+    if _route("log", level="info", message=message):
+        return
     if HAS_RICH:
         console.print(f"[cyan]ℹ[/cyan] {message}")
     else:
@@ -25,6 +50,8 @@ def log_info(message: str) -> None:
 
 
 def log_success(message: str) -> None:
+    if _route("log", level="success", message=message):
+        return
     if HAS_RICH:
         console.print(f"[green]✓[/green] {message}")
     else:
@@ -32,6 +59,8 @@ def log_success(message: str) -> None:
 
 
 def log_warning(message: str) -> None:
+    if _route("log", level="warning", message=message):
+        return
     if HAS_RICH:
         console.print(f"[yellow]⚠[/yellow] {message}")
     else:
@@ -39,6 +68,8 @@ def log_warning(message: str) -> None:
 
 
 def log_error(message: str) -> None:
+    if _route("log", level="error", message=message):
+        return
     if HAS_RICH:
         console.print(f"[red]✗[/red] {message}")
     else:
@@ -66,8 +97,11 @@ def display_prompt(prompt: str) -> None:
         print(f"\nProject Specification:\n{prompt}\n")
 
 
-def display_blueprint(blueprint: ArchitectureBlueprint) -> None:
+def display_blueprint(blueprint: ArchitectureBlueprint, *, output_console=None) -> None:
     """Pretty prints the architecture blueprint."""
+    if output_console is None and _route("blueprint", blueprint=blueprint):
+        return
+    target_console = output_console if output_console is not None else console
     if HAS_RICH:
         table = Table(title="Architect Blueprint: Planned Files", show_header=True, header_style="bold magenta")
         table.add_column("#", style="dim", width=4)
@@ -88,8 +122,8 @@ def display_blueprint(blueprint: ArchitectureBlueprint) -> None:
             f"[bold]Tech Stack:[/bold] {', '.join(blueprint.tech_stack)}\n"
             f"[bold]Acceptance Criteria:[/bold] {len(blueprint.acceptance_criteria)}"
         )
-        console.print(Panel(overview_content, title="Architect Design Overview", border_style="magenta"))
-        console.print(table)
+        target_console.print(Panel(overview_content, title="Architect Design Overview", border_style="magenta"))
+        target_console.print(table)
     else:
         print("\n--- ARCHITECTURE BLUEPRINT ---")
         print(f"Project Name: {blueprint.project_name}")
@@ -113,10 +147,15 @@ def display_summary_report(
     total_time: float,
     project_root: Path,
     approved: bool = True,
+    *,
+    output_console=None,
 ) -> None:
     """Displays the final summary report of the multi-agent run."""
+    if output_console is None and _route("summary", blueprint=blueprint, results=results, approved=approved):
+        return
     total_lines = sum(r["lines"] for r in results)
 
+    target_console = output_console if output_console is not None else console
     if HAS_RICH:
         summary_table = Table(title="Generated Project Summary", show_header=True, header_style="bold green")
         summary_table.add_column("File", style="cyan")
@@ -127,7 +166,7 @@ def display_summary_report(
         for r in results:
             summary_table.add_row(r["path"], str(r["lines"]), f"{r['duration']:.2f}s", r["summary"])
 
-        console.print("\n", summary_table)
+        target_console.print("\n", summary_table)
         if approved:
             stack = " ".join([blueprint.framework, *blueprint.tech_stack]).lower()
             guide_steps = [
@@ -158,7 +197,7 @@ def display_summary_report(
 
         status_text = "Pipeline Source Approved" if approved else "Pipeline Finished Without Approval"
         status_style = "green" if approved else "red"
-        console.print(Panel(
+        target_console.print(Panel(
             f"[bold {status_style}]{status_text}[/bold {status_style}]\n"
             f"• Project: [cyan]{blueprint.project_name}[/cyan]\n"
             f"• Files Created: [bold]{len(results)}[/bold] ({total_lines} total lines of code)\n"

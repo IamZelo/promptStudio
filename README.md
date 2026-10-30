@@ -1,4 +1,72 @@
-# Collaborative Multi-Agent Software Development Pipeline
+# PromptStudio
+
+Create and refine software projects through a scrolling terminal chat, powered by
+Gemini, llama.cpp, and the existing LangGraph pipeline. PromptStudio asks what you
+want to make, shows a plan for approval, displays agent progress, and presents the
+generated files and commands to run your project. Follow-up messages update the
+same project; saved conversations can be resumed later.
+
+## Start PromptStudio
+
+From the repository root:
+
+```bash
+python3 -m venv backend/.venv
+source backend/.venv/bin/activate
+pip install -e ./backend
+promptstudio --mock
+```
+
+Without installing the console command, use
+`python backend/promptstudio.py --mock` after installing `backend/requirements.txt`.
+Mock mode always creates the Quicknote demonstration; follow-ups append the
+request to its README rather than implementing arbitrary features.
+
+For live generation, configure `backend/.env` from `backend/.env.example`, set
+`GEMINI_API_KEY`, start your llama.cpp server, and run `promptstudio` without
+`--mock`. Missing credentials produce setup instructions, not a simulated run.
+
+```text
+You > Build a simple calculator in React
+... proposed architecture and file changes ...
+Build this plan? [y/N] y
+... Architect → Developer → QA → Critic ...
+You > Add keyboard support
+... proposed update to the same project ...
+```
+
+Architect plans and final file summaries use the detailed original CLI tables,
+including dependencies, responsibilities, line counts, generation times, and file
+summaries. During generation, output stays brief: stage updates and a live file
+count. Use `promptstudio --debug` (or `promptstudio --mock --debug`) to show
+per-file progress and detailed agent diagnostics.
+
+Commands: `/help`, `/new`, `/status`, `/files`, `/show <path>`, `/retry`, `/exit`.
+Empty input is ignored; Ctrl+C interrupts a run; Ctrl+D saves and exits.
+
+Sessions are stored in `.promptstudio/sessions/` under the directory where you
+launch the app. Resume **from that same directory** with
+`promptstudio --resume <session-id>`. Project output defaults to `./output/`;
+use `--output-dir /path/to/projects` when starting a session to change it.
+External edits require explicit acceptance before an update. Failed or cancelled
+updates preserve the previous published project. Source approval does not mean
+application tests were executed, and generated install/run commands are displayed
+for you to execute manually.
+
+The React frontend remains available as an optional standalone mock interface.
+The original `backend/main.py` and its arguments remain available for testing:
+
+```bash
+cd backend
+python main.py --mock -p "Build a note-taking CLI"
+python -m pytest tests/ -q
+```
+
+See [backend documentation](backend/README.md) for configuration and architecture.
+
+---
+
+## Pipeline Reference
 
 A CLI-first hybrid multi-agent system where Gemini and a local llama.cpp model design, implement, validate, review, and repair software projects from natural-language requirements.
 
@@ -30,7 +98,7 @@ A CLI-first hybrid multi-agent system where Gemini and a local llama.cpp model d
 │           ├── file_manager.py # Disk persistence
 │           └── ui.py           # Rich terminal formatting & status guides
 │
-├── frontend/                   # Web interface directory (planned Next.js / Streamlit)
+├── frontend/                   # Optional React/Vite interface
 │   └── README.md               # Frontend roadmap and architecture notes
 │
 ├── context.md                  # Project context and milestone tracker

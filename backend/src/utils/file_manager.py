@@ -29,7 +29,7 @@ def write_file_to_disk(base_dir: Path, rel_path: str, code: str) -> Path:
     if not target_path.is_relative_to(base_path):
         raise ValueError(f"Generated file path escapes project directory: {rel_path!r}")
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(code, encoding="utf-8")
+    target_path.write_text(code, encoding="utf-8", newline="")
     return target_path
 
 

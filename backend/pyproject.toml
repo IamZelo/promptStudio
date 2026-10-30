@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "promptstudio"
+version = "0.1.0"
+description = "Terminal chat for the multi-agent software development pipeline"
+requires-python = ">=3.10"
+dynamic = ["dependencies"]
+
+[project.scripts]
+promptstudio = "src.studio.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src", "src.*"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

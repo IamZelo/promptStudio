@@ -8,13 +8,13 @@ import re
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 from langgraph.graph import END, START, StateGraph
 
 from src.agents import run_architect_agent, run_critic_agent, run_developer_agent, run_qa_agent
-from src.agents.architect import validate_blueprint
-from src.schemas import CriticReview, ValidationResult
+from src.agents.architect import validate_blueprint, run_update_architect
+from src.schemas import ArchitectureBlueprint, CriticReview, PipelineResult, ValidationResult
 from src.state import ProjectState
 from src.utils import (
     count_lines,
@@ -45,6 +45,8 @@ class MultiAgentPipeline:
         install_dependencies: bool = False,
         overwrite: bool = False,
         test_timeout: int = 60,
+        on_event: Optional[Callable[[dict], None]] = None,
+        confirm_plan: Optional[Callable[[dict], bool]] = None,
     ):
         self.client = client
         self.model = model
@@ -57,6 +59,11 @@ class MultiAgentPipeline:
         self.install_dependencies = install_dependencies
         self.overwrite = overwrite
         self.test_timeout = test_timeout
+        self.on_event = on_event
+        self.confirm_plan = confirm_plan
+        self._baseline: Optional[ArchitectureBlueprint] = None
+        self._baseline_files: dict[str, str] = {}
+        self._before_publish: Optional[Callable[[], None]] = None
         self._started_at = 0.0
         self._active_workspace: Optional[Path] = None
 
@@ -71,27 +78,85 @@ class MultiAgentPipeline:
             raise RuntimeError("Architecture blueprint is not available")
         return self.output_dir / blueprint.project_name
 
+    def _emit(self, kind: str, **payload) -> None:
+        if self.on_event:
+            self.on_event({"type": kind, **payload})
+
     def _architect_node(self, state: ProjectState) -> dict:
+        self._emit("stage", stage="Architect", detail="Planning your request")
         log_info("Architect Agent (Gemini): designing the project...")
         try:
-            blueprint = run_architect_agent(self.client, self.model, state["user_prompt"])
+            summary = "Create a new project."
+            if self._baseline is not None:
+                plan = run_update_architect(
+                    self.client, self.model, state["user_prompt"],
+                    self._baseline, self._baseline_files,
+                )
+                blueprint = plan.blueprint
+                if blueprint.project_name != self._baseline.project_name:
+                    raise ValueError("Updates must preserve the project directory")
+                validate_blueprint(blueprint)
+                paths = {spec.path for spec in blueprint.files}
+                if not set(plan.changed_files) <= paths:
+                    raise ValueError("Update contains unknown changed files")
+                target = self.output_dir / blueprint.project_name
+                for path in paths - self._baseline_files.keys():
+                    if (target / path).exists() or (target / path).is_symlink():
+                        raise ValueError(f"New file collides with an unmanaged asset: {path}")
+                old_specs = {spec.path: spec for spec in self._baseline.files}
+                changed = set(plan.changed_files) | (paths - self._baseline_files.keys())
+                changed.update(
+                    spec.path for spec in blueprint.files
+                    if spec.path in old_specs and spec != old_specs[spec.path]
+                )
+                # Regenerate dependent contracts together instead of leaving stale callers.
+                while True:
+                    expanded = changed | {
+                        spec.path for spec in blueprint.files
+                        if set(spec.internal_dependencies) & changed
+                    }
+                    if expanded == changed:
+                        break
+                    changed = expanded
+                summary = plan.summary
+            else:
+                blueprint = run_architect_agent(self.client, self.model, state["user_prompt"])
+                paths = {spec.path for spec in blueprint.files}
+                changed = set(paths)
             display_blueprint(blueprint)
             target = self.output_dir / blueprint.project_name
-            if target.exists() and not self.overwrite:
-                raise FileExistsError(
-                    f"Project destination already exists: {target}. "
-                    "Use --overwrite or choose a different output directory."
+            if target.exists() and not self.overwrite and self._baseline is None:
+                advice = (
+                    "Resume its session or start with a different --output-dir."
+                    if self.confirm_plan else "Use --overwrite or choose a different output directory."
                 )
-            if self.interactive:
+                raise FileExistsError(f"Project destination already exists: {target}. {advice}")
+            changes = {
+                "create": sorted(paths - self._baseline_files.keys()),
+                "change": sorted(changed & self._baseline_files.keys()),
+                "remove": sorted(self._baseline_files.keys() - paths),
+            }
+            if self.confirm_plan is not None:
+                accepted = self.confirm_plan({
+                    "blueprint": blueprint, "summary": summary, "changes": changes,
+                })
+            elif self.interactive:
                 answer = input("\nProceed with this blueprint? [Y/n]: ").strip().lower()
-                if answer and answer != "y":
-                    return {"status": "cancelled", "errors": ["Execution halted by user."]}
+                accepted = not answer or answer == "y"
+            else:
+                accepted = True
+            if not accepted:
+                return {"blueprint": blueprint, "status": "cancelled", "errors": ["Plan declined."]}
             self._active_workspace = Path(
                 tempfile.mkdtemp(prefix=f"agent-{blueprint.project_name}-")
             )
+            files = {path: content for path, content in self._baseline_files.items() if path in paths}
+            for path, content in files.items():
+                write_file_to_disk(self._active_workspace, path, content)
             return {
                 "blueprint": blueprint,
-                "pending_files": [spec.path for spec in blueprint.files],
+                "files": files,
+                "pending_files": [spec.path for spec in blueprint.files if spec.path in changed],
                 "workspace_root": str(self._active_workspace),
                 "status": "developing",
             }
@@ -104,6 +169,7 @@ class MultiAgentPipeline:
         return "develop" if state["status"] == "developing" else END
 
     def _developer_node(self, state: ProjectState) -> dict:
+        self._emit("stage", stage="Developer", detail="Generating" if not state["iteration"] else f"Repair {state['iteration']}")
         blueprint = state["blueprint"]
         assert blueprint is not None
         project_root = self._project_root(state)
@@ -146,6 +212,13 @@ class MultiAgentPipeline:
                     project_prompt=state["user_prompt"],
                     feedback=repair_feedback,
                 )
+                if self._baseline is not None and self.client is None and self.developer_client is None and spec.path == "README.md":
+                    generated = generated.model_copy(update={
+                        "code": self._baseline_files.get(spec.path, generated.code)
+                        + "\n\n## PromptStudio mock follow-up\n\n"
+                        + state["user_prompt"].split("USER: ")[-1] + "\n",
+                        "summary": "Recorded follow-up request (offline demo only).",
+                    })
                 validate_generated_content(spec.path, generated.code)
                 candidate_files[spec.path] = generated.code
                 candidate_results = [
@@ -158,6 +231,7 @@ class MultiAgentPipeline:
                     "duration": time.time() - started,
                 })
                 generated_candidates.append(generated)
+                self._emit("file", path=spec.path, index=index, total=len(specs))
                 log_success(f"[{index}/{len(specs)}] Generated {spec.path}")
             except Exception as exc:
                 message = f"Developer failed for {spec.path}: {exc}"
@@ -185,6 +259,7 @@ class MultiAgentPipeline:
         }
 
     def _qa_node(self, state: ProjectState) -> dict:
+        self._emit("stage", stage="QA", detail="Checking source syntax")
         blueprint = state["blueprint"]
         assert blueprint is not None
         missing = [spec.path for spec in blueprint.files if spec.path not in state["files"]]
@@ -301,6 +376,7 @@ class MultiAgentPipeline:
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
     def _critic_node(self, state: ProjectState) -> dict:
+        self._emit("stage", stage="Critic", detail="Reviewing generated source")
         blueprint = state["blueprint"]
         validation = state["validation"]
         assert blueprint is not None and validation is not None
@@ -430,7 +506,7 @@ class MultiAgentPipeline:
         """Atomically publish only manifest files from an approved in-memory snapshot."""
         target = self._final_project_root(state)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        if target.exists() and not self.overwrite:
+        if target.exists() and not self.overwrite and self._baseline is None:
             raise FileExistsError(
                 f"Refusing to replace existing project {target}. Use --overwrite or a new output directory."
             )
@@ -440,6 +516,16 @@ class MultiAgentPipeline:
         ))
         backup = target.with_name(f".{target.name}-backup-{int(time.time() * 1000)}")
         try:
+            if self._before_publish:
+                self._before_publish()
+            if self._baseline is not None:
+                # Preserve untracked assets and installed dependencies during managed updates.
+                shutil.copytree(target, publish_root, dirs_exist_ok=True, symlinks=True)
+                for path in self._baseline_files.keys() - state["files"].keys():
+                    removed = publish_root / path
+                    if not removed.resolve().is_relative_to(publish_root.resolve()):
+                        raise ValueError(f"Unsafe removed path: {path}")
+                    removed.unlink(missing_ok=True)
             for path, content in state["files"].items():
                 write_file_to_disk(publish_root, path, content)
             publish_error = self._published_snapshot_error(
@@ -447,12 +533,14 @@ class MultiAgentPipeline:
             )
             if publish_error:
                 raise RuntimeError(publish_error)
+            if self._before_publish:
+                self._before_publish()
             if target.exists():
+                if not self.overwrite and self._baseline is None:
+                    raise FileExistsError(f"Project destination appeared during generation: {target}")
                 target.rename(backup)
             publish_root.rename(target)
-            if backup.exists():
-                shutil.rmtree(backup)
-        except Exception:
+        except BaseException:
             if target.exists() and backup.exists():
                 shutil.rmtree(target)
             if backup.exists():
@@ -460,6 +548,13 @@ class MultiAgentPipeline:
             if publish_root.exists():
                 shutil.rmtree(publish_root)
             raise
+        # The rename committed successfully. Cleanup must never trigger rollback
+        # from a partially deleted backup or misreport a committed run as cancelled.
+        try:
+            if backup.exists():
+                shutil.rmtree(backup, ignore_errors=True)
+        except KeyboardInterrupt:
+            pass
         return target
 
     @staticmethod
@@ -469,7 +564,7 @@ class MultiAgentPipeline:
             written = root / path
             if not written.is_file():
                 return f"Published snapshot is missing generated file: {path}"
-            if written.read_text(encoding="utf-8") != content:
+            if written.read_bytes() != content.encode("utf-8"):
                 return f"Published snapshot changed generated file contents: {path}"
 
         stack = " ".join([blueprint.framework, *blueprint.tech_stack]).lower()
@@ -497,8 +592,36 @@ class MultiAgentPipeline:
         return None
 
     def run(self, project_prompt: str) -> bool:
-        """Execute the graph and report whether the project was approved."""
+        """Compatibility entry point for the existing one-shot CLI."""
+        return self.execute(project_prompt).approved
+
+    def execute(
+        self, project_prompt: str,
+        baseline: Optional[ArchitectureBlueprint] = None,
+        files: Optional[dict[str, str]] = None,
+        before_publish: Optional[Callable[[], None]] = None,
+    ) -> PipelineResult:
+        """Execute a creation/update transaction and return a structured outcome."""
+        from contextlib import nullcontext
+        from src.utils.ui import presentation_events
+
+        self._baseline = baseline
+        self._baseline_files = dict(files or {})
+        self._before_publish = before_publish
         self._started_at = time.time()
+        scope = presentation_events(self.on_event) if self.on_event else nullcontext()
+        try:
+            with scope:
+                return self._execute(project_prompt)
+        finally:
+            if self._active_workspace is not None:
+                shutil.rmtree(self._active_workspace, ignore_errors=True)
+                self._active_workspace = None
+            self._baseline = None
+            self._baseline_files = {}
+            self._before_publish = None
+
+    def _execute(self, project_prompt: str) -> PipelineResult:
         initial_state: ProjectState = {
             "user_prompt": project_prompt,
             "blueprint": None,
@@ -517,15 +640,9 @@ class MultiAgentPipeline:
             "last_failure_signature": "",
             "status": "starting",
         }
-        try:
-            final = self._build_graph().invoke(
-                initial_state, config={"recursion_limit": 4 + (self.max_iterations * 4)}
-            )
-        except Exception:
-            if self._active_workspace is not None:
-                shutil.rmtree(self._active_workspace, ignore_errors=True)
-                self._active_workspace = None
-            raise
+        final = self._build_graph().invoke(
+            initial_state, config={"recursion_limit": 6 + (self.max_iterations * 4)}
+        )
         blueprint = final.get("blueprint")
         approved = final["status"] == "approved"
         project_root = self.output_dir / blueprint.project_name if blueprint else self.output_dir
@@ -535,19 +652,21 @@ class MultiAgentPipeline:
             except Exception as exc:
                 approved = False
                 final["status"] = "failed"
+                final["errors"] = [*final["errors"], f"Publish failed: {exc}"]
                 log_error(f"Approved snapshot could not be published: {exc}")
         if blueprint is not None:
             display_summary_report(
-                blueprint=blueprint,
-                results=final["generation_results"],
+                blueprint=blueprint, results=final["generation_results"],
                 total_time=time.time() - self._started_at,
-                project_root=project_root,
-                approved=approved,
+                project_root=project_root, approved=approved,
             )
-        workspace_root = final.get("workspace_root")
-        if workspace_root:
-            shutil.rmtree(workspace_root, ignore_errors=True)
-            self._active_workspace = None
         if not approved:
             log_error(f"Pipeline finished with status: {final['status']}")
-        return approved
+        return PipelineResult(
+            status=final["status"], blueprint=blueprint,
+            files=final["files"] if approved else {},
+            results=final["generation_results"], validation=final["validation"],
+            review=final["review"], errors=final["errors"],
+            output_path=str(project_root.resolve()) if approved else None,
+            duration=time.time() - self._started_at,
+        )

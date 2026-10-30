@@ -16,3 +16,7 @@ dist/
 .next/
 build/
 .cache/
+
+# PromptStudio local conversations and packaging
+.promptstudio/
+*.egg-info/

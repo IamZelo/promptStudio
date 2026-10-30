@@ -1,0 +1,1 @@
+"""PromptStudio terminal application."""

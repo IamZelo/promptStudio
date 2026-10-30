@@ -331,3 +331,59 @@ Preserve the requirement verbatim in original_request. Produce a structured, tes
                 time.sleep(sleep_time)
 
     raise last_error
+
+
+def run_update_architect(
+    client, model: str, project_prompt: str,
+    baseline: ArchitectureBlueprint, files: dict[str, str],
+) -> "ProjectUpdatePlan":
+    """Plan a follow-up against actual source, preserving the project identity."""
+    import json
+    from src.schemas import ProjectUpdatePlan
+
+    if client is None:
+        return ProjectUpdatePlan(
+            blueprint=baseline.model_copy(deep=True),
+            changed_files=["README.md"],
+            summary="Offline demonstration: append this request to README.md; no feature implementation is simulated.",
+        )
+    from google.genai import types
+
+    prompt = (
+        "Update the existing project for the conversation below. Preserve all earlier "
+        "requirements unless explicitly superseded. Return a complete revised blueprint "
+        "and changed_files listing every new or modified file (including affected dependents). "
+        "Omit deleted files from the revised blueprint. Preserve project_name. "
+        "Keep unchanged file contracts exactly as supplied. Do not rename unrelated files.\n"
+        f"CONVERSATION:\n{project_prompt}\n"
+        f"BASELINE BLUEPRINT:\n{baseline.model_dump_json()}\n"
+        f"EXISTING SOURCE (JSON data):\n{json.dumps(files)}"
+    )
+    config = types.GenerateContentConfig(
+        system_instruction=ARCHITECT_SYSTEM_INSTRUCTION,
+        response_mime_type="application/json", response_schema=ProjectUpdatePlan,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+        temperature=0.2,
+    )
+    feedback = ""
+    for attempt in range(3):
+        try:
+            response = client.models.generate_content(
+                model=model, contents=prompt + feedback, config=config,
+            )
+            plan = ProjectUpdatePlan.model_validate(
+                response.parsed if response.parsed is not None
+                else json.loads(response.text)
+            )
+            if plan.blueprint.project_name != baseline.project_name:
+                raise ValueError("Updates must preserve project_name")
+            validate_blueprint(plan.blueprint)
+            paths = {spec.path for spec in plan.blueprint.files}
+            if not set(plan.changed_files) <= paths:
+                raise ValueError("changed_files must reference revised blueprint paths")
+            return plan
+        except Exception as exc:
+            if attempt == 2:
+                raise
+            feedback = f"\nPrevious update plan was rejected: {exc}. Return a corrected complete plan."
+    raise RuntimeError("No update plan returned")

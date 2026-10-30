@@ -6,7 +6,7 @@ from Gemini's structured output generation.
 
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import List, Literal, Optional
 from pathlib import PurePosixPath
 
 from pydantic import BaseModel, Field, field_validator
@@ -201,3 +201,29 @@ class CriticReview(BaseModel):
         default_factory=list,
         description="Files missing from the blueprint that must be added to make the project complete",
     )
+
+
+class ProjectUpdatePlan(BaseModel):
+    """A complete revised contract plus the explicit generation set."""
+
+    blueprint: ArchitectureBlueprint
+    changed_files: List[str]
+    summary: str
+
+
+class PipelineResult(BaseModel):
+    """Machine-readable outcome; files are available only for approved runs."""
+
+    status: str
+    blueprint: Optional[ArchitectureBlueprint] = None
+    files: dict[str, str] = Field(default_factory=dict)
+    results: List[dict] = Field(default_factory=list)
+    validation: Optional[ValidationResult] = None
+    review: Optional[CriticReview] = None
+    errors: List[str] = Field(default_factory=list)
+    output_path: Optional[str] = None
+    duration: float = 0.0
+
+    @property
+    def approved(self) -> bool:
+        return self.status == "approved"

@@ -1,4 +1,82 @@
-# Collaborative Multi-Agent Software Development Pipeline
+# PromptStudio Terminal Chat
+
+PromptStudio is the primary interactive interface. It calls the Python pipeline
+directly, so no web server or Node.js installation is needed for terminal use.
+The existing `main.py` argument interface is unchanged.
+
+## Install and launch
+
+From `backend/`, with a virtual environment activated:
+
+```bash
+pip install -e .
+promptstudio --mock
+# Or, without installing the console command:
+python promptstudio.py --mock
+# Equivalent module entry point:
+python -m src.studio --mock
+```
+
+For the script/module alternatives, install `pip install -r requirements.txt`
+first. For live generation, copy `.env.example` to `.env`, set `GEMINI_API_KEY`,
+start `llama-server`, then launch `promptstudio` without `--mock`.
+The backend `.env` is resolved independently of your launch directory; environment
+variables take precedence. Model and llama.cpp connection flags follow the
+one-shot CLI names: `--model`, `--llama-model`, `--llama-url`,
+`--llama-timeout`, and `--max-repair-attempts`.
+
+Architect plans and final file summaries use the detailed original CLI tables,
+including dependencies, responsibilities, line counts, generation times, and file
+summaries. During generation, output stays brief: stage updates and a live file
+count. Use `promptstudio --debug` (or `promptstudio --mock --debug`) to show
+per-file progress and detailed agent diagnostics.
+
+## Chat and follow-ups
+
+Enter a project request, review the proposed technology choices and file changes,
+and type `y` at `Build this plan? [y/N]`. A follow-up uses the current approved
+source and conversation requirements. Changed files and dependent files are
+regenerated in an isolated workspace. The full candidate is checked before it
+replaces the published project. Local edits are detected before planning and
+checked again before publication. Unmanaged assets and installed dependencies
+are retained during updates; explicit planned removals affect managed files.
+
+- `/help`: list commands.
+- `/new`: save the current session and start an independent conversation.
+- `/status`, `/files`, `/show <path>`: inspect the current project.
+- `/retry`: retry a failed, declined, or interrupted request.
+- `/exit` or Ctrl+D: save and exit. Ctrl+C cancels a running operation.
+
+Resume with `promptstudio --resume <session-id>` from the original launch
+directory. Sessions live in `.promptstudio/sessions/`, contain conversation and
+project source, and are ignored by Git. They do not store model credentials.
+Treat saved conversations as local project data. Only PromptStudio-created
+projects are supported; arbitrary repository import is not part of this version.
+Project paths are absolute in saved sessions. Custom model/connection flags can
+be supplied again when resuming; the saved live/mock mode is retained.
+
+Mock mode is a deterministic Quicknote demo. It creates the existing sample
+project, then appends follow-up requests to README.md to demonstrate update and
+resume behavior. It does not implement arbitrary requested features.
+
+QA remains the existing syntax and semantic review workflow, not execution of
+application tests or installation of generated dependencies. Progress is reported
+per stage and completed file, rather than streamed model tokens.
+
+## Contributor verification
+
+```bash
+python -m pytest tests/ -q
+```
+
+Pipeline callers can use `execute(prompt, baseline=..., files=...,
+before_publish=...)` for a structured `PipelineResult`, optional `on_event`
+notifications, and `confirm_plan` callbacks. `run(prompt) -> bool` and the original
+CLI retain their existing presentation and argument behavior.
+
+---
+
+## Pipeline Architecture Reference
 
 An automated CLI-first system where specialized AI roles design, implement, validate, review, and repair software applications based on user prompts.
 
